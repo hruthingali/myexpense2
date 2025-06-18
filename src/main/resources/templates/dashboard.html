@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head><title>Dashboard</title></head>
+<body>
+  <h2>Dashboard</h2>
+  <a th:href="@{/add-expense}">Add Expense</a>
+  <form th:action="@{/filter}" method="get">
+    <label>Category:</label>
+    <select name="category">
+      <option value="Food">Food</option>
+      <option value="Travel">Travel</option>
+      <option value="Bills">Bills</option>
+    </select>
+    <button type="submit">Filter</button>
+  </form>
+  <h3>Your Expenses:</h3>
+  <table border="1">
+    <tr><th>Category</th><th>Amount</th><th>Date</th></tr>
+    <tr th:each="e : ${expenses}">
+      <td th:text="${e.category}"></td>
+      <td th:text="${e.amount}"></td>
+      <td th:text="${e.date}"></td>
+    </tr>
+  </table>
+  <form th:action="@{/logout}" method="post">
+    <button type="submit">Logout</button>
+  </form>
+</body>
+</html>
