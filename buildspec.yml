@@ -34,8 +34,13 @@ phases:
       - echo Pushing image to Amazon ECR...
       - docker push $IMAGE_URI
       - echo Preparing Kubernetes manifests...
+      - echo "Listing files:"
+      - ls -la
+      - pwd
       - mkdir -p k8s-out
+      - pwd
       - sed "s|IMAGE_PLACEHOLDER|$IMAGE_URI|g" deployment.yaml > k8s-out/deployment.yaml
+      - pwd
       - cp service.yaml k8s-out/service.yaml
       - echo Done preparing artifacts.
 
