@@ -3,38 +3,49 @@ version: 0.2
 env:
   variables:
     ACCOUNT_ID: 557690580165
-    REGION: us-east-1
+    REGION: us-west-1 # <-- CRITICAL CHANGE: Corrected region to us-west-1
     REPO_NAME: expense
     IMAGE_TAG: latest
-    IMAGE_URI: 557690580165.dkr.ecr.us-east-1.amazonaws.com/expense:latest
+    IMAGE_URI: 557690580165.dkr.ecr.us-west-1.amazonaws.com/expense:latest # <-- Also changed ECR URI region
+    EKS_CLUSTER_NAME: expense-tracker-eks-cluster
+    CODEPIPELINE_ROLE_ARN: arn:aws:iam::557690580165:role/service-role/AWSCodePipelineServiceRole-us-west-1-springpipeline
 
 phases:
   install:
     runtime-versions:
-      java: corretto17  # ONLY include Java here; Docker doesn't belong here
+      java: corretto17
     commands:
-      - echo Installing Maven...
+      - echo "Installing dependencies (Maven, Docker, kubectl, jq)..."
+      - yum update -y
       - yum install -y maven docker
+
+      # Install kubectl
+      - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+      - chmod +x ./kubectl
+      - mv ./kubectl /usr/local/bin/kubectl # Move to a directory in PATH
+
+      # Install jq (for JSON processing, used for aws-auth ConfigMap)
+      - yum install -y jq
 
   pre_build:
     commands:
-      - echo Logging in to Amazon ECR...
+      - echo "Logging in to Amazon ECR..."
       - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
 
   build:
     commands:
-      - echo Building JAR inside app-tier...
+      - echo "Building JAR inside app-tier..."
       - mvn clean package -DskipTests
-      - echo Building Docker image...
+      - echo "Building Docker image..."
       - docker build -t $REPO_NAME:$IMAGE_TAG .
       - docker tag $REPO_NAME:$IMAGE_TAG $IMAGE_URI
 
   post_build:
     commands:
-      - echo Pushing image to Amazon ECR...
+      - echo "Pushing image to Amazon ECR..."
       - docker push $IMAGE_URI
-      - echo Preparing Kubernetes manifests...
-      - echo "Listing files:"
+      - echo "Preparing Kubernetes manifests..."
+      - echo "Listing files in current directory:"
       - ls -la
       - pwd
       - mkdir -p k8s-out
@@ -42,7 +53,30 @@ phases:
       - sed "s|IMAGE_PLACEHOLDER|$IMAGE_URI|g" deployment.yaml > k8s-out/deployment.yaml
       - pwd
       - cp service.yaml k8s-out/service.yaml
-      - echo Done preparing artifacts.
+      - echo "Done preparing artifacts."
+
+      # EKS Deployment Steps
+      - echo "Configuring kubectl for EKS cluster: ${EKS_CLUSTER_NAME} in region: ${REGION}..."
+      - aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${REGION}
+
+      - echo "Granting cluster-admin permissions to CodePipeline role via aws-auth ConfigMap..."
+      - |
+        # Fetch the current aws-auth ConfigMap
+        kubectl get configmap aws-auth -n kube-system -o json > /tmp/aws-auth-configmap.json
+        
+        # Add or update the CodePipeline role in mapRoles, ensuring correct JSON structure
+        jq --arg rolearn "${CODEPIPELINE_ROLE_ARN}" \
+           '.data.mapRoles |= (fromjson | [.[] | select(.rolearn != $rolearn)] + [{"rolearn":$rolearn,"username":"code-pipeline-admin","groups":["system:masters"]}] | tojson)' \
+           /tmp/aws-auth-configmap.json > /tmp/aws-auth-patch.json
+        
+        # Apply the patched ConfigMap
+        kubectl patch configmap aws-auth -n kube-system --patch-file /tmp/aws-auth-patch.json
+        echo "aws-auth ConfigMap updated successfully."
+
+      - echo "Deploying Kubernetes manifests to EKS cluster..."
+      - kubectl apply -f k8s-out/deployment.yaml
+      - kubectl apply -f k8s-out/service.yaml
+      - echo "Kubernetes deployment and service applied."
 
 artifacts:
   base-directory: k8s-out
