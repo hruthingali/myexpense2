@@ -3,12 +3,17 @@ version: 0.2
 env:
   variables:
     ACCOUNT_ID: 557690580165
-    REGION: us-west-1 # <-- CRITICAL CHANGE: Corrected region to us-west-1
+    
+    # ECR Region - where your Docker image is stored
+    ECR_REGION: us-east-1 # Your ECR repository is in us-east-1
     REPO_NAME: expense
     IMAGE_TAG: latest
-    IMAGE_URI: 557690580165.dkr.ecr.us-west-1.amazonaws.com/expense:latest # <-- Also changed ECR URI region
+    IMAGE_URI: 557690580165.dkr.ecr.us-east-1.amazonaws.com/expense:latest # ECR URI uses ECR_REGION
+
+    # EKS Cluster Region - where your EKS cluster is located
+    EKS_CLUSTER_REGION: us-west-1 # Your EKS cluster is in us-west-1
     EKS_CLUSTER_NAME: expense-tracker-eks-cluster
-    CODEPIPELINE_ROLE_ARN: arn:aws:iam::557690580165:role/service-role/AWSCodePipelineServiceRole-us-west-1-springpipeline
+    CODEPIPELINE_ROLE_ARN: arn:aws:iam::557690580165:role/service-role/AWSCodePipelineServiceRole-us-west-1-springpipeline # This role accesses EKS in us-west-1
 
 phases:
   install:
@@ -29,8 +34,8 @@ phases:
 
   pre_build:
     commands:
-      - echo "Logging in to Amazon ECR..."
-      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com
+      - echo "Logging in to Amazon ECR in ${ECR_REGION}..."
+      - aws ecr get-login-password --region ${ECR_REGION} | docker login --username AWS --password-stdin ${ACCOUNT_ID}.dkr.ecr.${ECR_REGION}.amazonaws.com
 
   build:
     commands:
@@ -42,7 +47,7 @@ phases:
 
   post_build:
     commands:
-      - echo "Pushing image to Amazon ECR..."
+      - echo "Pushing image to Amazon ECR in ${ECR_REGION}..."
       - docker push $IMAGE_URI
       - echo "Preparing Kubernetes manifests..."
       - echo "Listing files in current directory:"
@@ -56,8 +61,8 @@ phases:
       - echo "Done preparing artifacts."
 
       # EKS Deployment Steps
-      - echo "Configuring kubectl for EKS cluster: ${EKS_CLUSTER_NAME} in region: ${REGION}..."
-      - aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${REGION}
+      - echo "Configuring kubectl for EKS cluster: ${EKS_CLUSTER_NAME} in region: ${EKS_CLUSTER_REGION}..."
+      - aws eks update-kubeconfig --name ${EKS_CLUSTER_NAME} --region ${EKS_CLUSTER_REGION}
 
       - echo "Granting cluster-admin permissions to CodePipeline role via aws-auth ConfigMap..."
       - |
