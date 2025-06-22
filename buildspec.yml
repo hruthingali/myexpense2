@@ -5,8 +5,8 @@ env:
     ACCOUNT_ID: 557690580165
     REGION: us-east-1
     REPO_NAME: expense
-    IMAGE_TAG: latest
-    IMAGE_URI: 557690580165.dkr.ecr.us-east-1.amazonaws.com/expense:latest
+    IMAGE_TAG: new
+    IMAGE_URI: 557690580165.dkr.ecr.us-east-1.amazonaws.com/expense:new
 
 phases:
   install:
