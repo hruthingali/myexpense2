@@ -21,7 +21,7 @@ spec:
             - containerPort: 80
           env:
             - name: SPRING_DATASOURCE_URL
-              value: jdbc:mysql://mysqldatabase.cr2m0iwukuh1.us-west-2.rds.amazonaws.com:3306/mydb
+              value: jdbc:mysql://mydatabase.chugycug40wd.us-east-1.rds.amazonaws.com:3306/mydb
             - name: SPRING_DATASOURCE_USERNAME
               value: admin
             - name: SPRING_DATASOURCE_PASSWORD
