@@ -7,13 +7,16 @@ env:
     REPO_NAME: expense
     IMAGE_TAG: new
     IMAGE_URI: 557690580165.dkr.ecr.us-east-1.amazonaws.com/expense:new
+    SONAR_HOST_URL: http://44.204.71.196
+    SONAR_PROJECT_KEY: project
+    SONAR_LOGIN: sqp_bad3c0442a02d9dcbc2190ddac0888de1cece0e4
 
 phases:
   install:
     runtime-versions:
-      java: corretto17  # ONLY include Java here; Docker doesn't belong here
+      java: corretto17
     commands:
-      - echo Installing Maven...
+      - echo Installing Maven and Docker...
       - yum install -y maven docker
 
   pre_build:
@@ -25,6 +28,11 @@ phases:
     commands:
       - echo Building JAR inside app-tier...
       - mvn clean package -DskipTests
+      - echo Running SonarQube Analysis...
+      - mvn verify sonar:sonar \
+          -Dsonar.projectKey=$SONAR_PROJECT_KEY \
+          -Dsonar.host.url=$SONAR_HOST_URL \
+          -Dsonar.login=$SONAR_LOGIN
       - echo Building Docker image...
       - docker build -t $REPO_NAME:$IMAGE_TAG .
       - docker tag $REPO_NAME:$IMAGE_TAG $IMAGE_URI
@@ -34,13 +42,8 @@ phases:
       - echo Pushing image to Amazon ECR...
       - docker push $IMAGE_URI
       - echo Preparing Kubernetes manifests...
-      - echo "Listing files:"
-      - ls -la
-      - pwd
       - mkdir -p k8s-out
-      - pwd
       - sed "s|IMAGE_PLACEHOLDER|$IMAGE_URI|g" deployment.yaml > k8s-out/deployment.yaml
-      - pwd
       - cp service.yaml k8s-out/service.yaml
       - echo Done preparing artifacts.
 
