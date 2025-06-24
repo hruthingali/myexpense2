@@ -4,7 +4,7 @@ env:
   variables:
     ACCOUNT_ID: 557690580165
     REGION: us-east-2
-    REPO_NAME: expimage
+    REPO_NAME: expimg-ohio
     IMAGE_TAG: latest
     IMAGE_URI: 557690580165.dkr.ecr.us-east-2.amazonaws.com/expimg-ohio:latest
     SONAR_HOST_URL: http://44.204.71.196
