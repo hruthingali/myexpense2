@@ -28,10 +28,7 @@ phases:
       - echo Building JAR inside app-tier...
       - mvn clean package -DskipTests
       - echo Running SonarQube Analysis...
-      - mvn clean verify sonar:sonar \
-          -Dsonar.projectKey=project2 \
-          -Dsonar.host.url=$SONAR_HOST_URL \
-          -Dsonar.login=sqp_44cab9241ba0cf7f14a9265c33e7c72db83d27eb
+      - mvn clean verify sonar:sonar -Dsonar.projectKey=project2 -Dsonar.host.url=$SONAR_HOST_URL -Dsonar.login=sqp_44cab9241ba0cf7f14a9265c33e7c72db83d27eb
       - echo Building Docker image...
       - docker build -t $REPO_NAME:$IMAGE_TAG .
       - docker tag $REPO_NAME:$IMAGE_TAG $IMAGE_URI
