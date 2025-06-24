@@ -21,7 +21,7 @@ spec:
             - containerPort: 80
           env:
             - name: SPRING_DATASOURCE_URL
-              value: jdbc:mysql://expense-tracker-db.cr2m0iwukuh1.us-west-2.rds.amazonaws.com:3306/expensetracker
+              value: jdbc:mysql://expense-tracker-db.cpk8woqis9hy.us-east-2.rds.amazonaws.com:3306/expensetracker
             - name: SPRING_DATASOURCE_USERNAME
               value: admin
             - name: SPRING_DATASOURCE_PASSWORD
