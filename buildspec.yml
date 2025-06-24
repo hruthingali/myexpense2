@@ -5,7 +5,7 @@ env:
     ACCOUNT_ID: 557690580165
     REGION: us-west-2
     REPO_NAME: expimage
-    IMAGE_TAG: new2
+    IMAGE_TAG: latest
     IMAGE_URI: 557690580165.dkr.ecr.us-west-2.amazonaws.com/expimage:latest
     SONAR_HOST_URL: http://44.204.71.196
 
