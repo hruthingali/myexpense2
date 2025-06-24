@@ -1,0 +1,685 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  Comprehensive CloudFormation template for a 3-tier architecture with AWS EKS and RDS MySQL.
+  Includes VPC, subnets (public, private-app, private-db), IGW, NAT Gateway, Route Tables,
+  Security Groups, EKS Cluster with Managed Node Group, and RDS MySQL DB.
+
+Parameters:
+  # --- General Parameters ---
+  EnvironmentName:
+    Type: String
+    Default: ExpenseTracker
+    Description: A name prefix for resources to ensure uniqueness.
+  ProjectTag:
+    Type: String
+    Default: Capstone
+    Description: A tag value for all resources.
+  AdminIpCidr:
+    Type: String
+    Default: 0.0.0.0/0 
+    Description: Your public IP address CIDR for SSH (to EC2) and kubectl access (to EKS API).
+
+  # --- Network Parameters ---
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for the main VPC.
+  PublicSubnetCidr:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for the Public Subnet (Frontend ALB and NAT Gateway) in AZ-a.
+  PublicSubnetCidr2:
+    Type: String
+    Default: 10.0.5.0/24 # New CIDR for second Public Subnet
+    Description: CIDR block for the Public Subnet (Frontend ALB and NAT Gateway) in AZ-c.
+  PrivateAppSubnetCidr:
+    Type: String
+    Default: 10.0.2.0/24
+    Description: CIDR block for the Private Application Subnet (EKS Worker Nodes/App Pods) in AZ-a.
+  PrivateAppSubnetCidr2:
+    Type: String
+    Default: 10.0.6.0/24 # New CIDR for second Private App Subnet
+    Description: CIDR block for the Private Application Subnet (EKS Worker Nodes/App Pods) in AZ-c.
+  PrivateDbSubnetCidr:
+    Type: String
+    Default: 10.0.3.0/24
+    Description: CIDR block for the Private Database Subnet (RDS MySQL) in AZ-a.
+  PrivateDbSubnetCidr2:
+    Type: String
+    Default: 10.0.4.0/24
+    Description: CIDR block for the Private Database Subnet (RDS MySQL) in AZ-c.
+
+  # --- EKS Cluster Parameters ---
+  EksClusterName:
+    Type: String
+    Default: expense-tracker-eks-cluster
+    Description: Name of the EKS cluster.
+  EksNodeInstanceType:
+    Type: String
+    Default: t3.medium
+    Description: EC2 instance type for EKS worker nodes.
+  EksNodeMinSize:
+    Type: Number
+    Default: 1
+    Description: Minimum number of EKS worker nodes.
+  EksNodeDesiredSize:
+    Type: Number
+    Default: 2
+    Description: Desired number of EKS worker nodes.
+  EksNodeMaxSize:
+    Type: Number
+    Default: 3
+    Description: Maximum number of EKS worker nodes.
+
+  # --- RDS Database Parameters ---
+  DbInstanceIdentifier:
+    Type: String
+    Default: expense-tracker-db
+    Description: Identifier for the RDS DB instance.
+  DbName:
+    Type: String
+    Default: expensetracker
+    Description: Initial database name.
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    Description: The DB instance class (e.g., db.t3.micro).
+  DbAllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: The amount of storage (GB) to allocate to the DB instance.
+
+Resources:
+  # --- 1. VPC and Networking Components (Foundation) ---
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-VPC
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-IGW
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PublicSubnetCidr
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 0, !GetAZs '' ] # Dynamically select the first AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet-a
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+        - Key: !Sub kubernetes.io/cluster/${EksClusterName}
+          Value: owned
+
+  PublicSubnet2: # NEW: Public Subnet in second AZ
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PublicSubnetCidr2
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [ 1, !GetAZs '' ] # Dynamically select the second AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet-c
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: kubernetes.io/role/elb
+          Value: "1"
+        - Key: !Sub kubernetes.io/cluster/${EksClusterName}
+          Value: owned
+
+  PrivateAppSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PrivateAppSubnetCidr
+      AvailabilityZone: !Select [ 0, !GetAZs '' ] # Dynamically select the first AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateAppSubnet-a
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+        - Key: !Sub kubernetes.io/cluster/${EksClusterName}
+          Value: owned
+
+  PrivateAppSubnet2: # NEW: Private App Subnet in second AZ
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PrivateAppSubnetCidr2
+      AvailabilityZone: !Select [ 1, !GetAZs '' ] # Dynamically select the second AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateAppSubnet-c
+        - Key: Project
+          Value: !Ref ProjectTag
+        - Key: kubernetes.io/role/internal-elb
+          Value: "1"
+        - Key: !Sub kubernetes.io/cluster/${EksClusterName}
+          Value: owned
+
+  PrivateDbSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PrivateDbSubnetCidr
+      AvailabilityZone: !Select [ 0, !GetAZs '' ] # Dynamically select the first AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateDbSubnet-a
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PrivateDbSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !Ref PrivateDbSubnetCidr2
+      AvailabilityZone: !Select [ 1, !GetAZs '' ] # Dynamically select the second AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateDbSubnet-c
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NatGatewayEIP-a
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NatGateway-a
+        - Key: Project
+          Value: !Ref ProjectTag
+    DependsOn: AttachGateway
+
+  NatGatewayEIP2: # NEW: EIP for second NAT Gateway
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NatGatewayEIP-c
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  NatGateway2: # NEW: Second NAT Gateway
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP2.AllocationId
+      SubnetId: !Ref PublicSubnet2 # Associate with new PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-NatGateway-c
+        - Key: Project
+          Value: !Ref ProjectTag
+    DependsOn: AttachGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRT
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociation2: # NEW: Association for PublicSubnet2
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateAppRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateAppRT
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PrivateAppRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway # Route to NatGateway in AZ-a
+    DependsOn: NatGateway
+
+  PrivateAppSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet
+      RouteTableId: !Ref PrivateAppRouteTable
+
+  PrivateAppRouteTable2: # NEW: Route Table for PrivateAppSubnet2
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateAppRT-c
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PrivateAppRoute2: # NEW: Route for PrivateAppRouteTable2
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateAppRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2 # Route to NatGateway in AZ-c
+    DependsOn: NatGateway2
+
+  PrivateAppSubnetRouteTableAssociation2: # NEW: Association for PrivateAppSubnet2
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateAppSubnet2
+      RouteTableId: !Ref PrivateAppRouteTable2
+
+  PrivateDbRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateDbRT
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  PrivateDbSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDbSubnet
+      RouteTableId: !Ref PrivateDbRouteTable
+
+  PrivateDbSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateDbSubnet2
+      RouteTableId: !Ref PrivateDbRouteTable
+
+  # --- 2. Define all base Security Groups (NO INGRESS/EGRESS RULES YET) ---
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Load Balancer
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-LoadBalancerSG
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  EksWorkerNodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EKS worker nodes
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EKSWorkerNodeSG
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  EksClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EKS cluster control plane access
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EKSClusterSG
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  RdsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RDSSG
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  # --- 3. IAM Roles for EKS (Needed before EKS Cluster and Node Group) ---
+  EksClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKSVPCResourceController
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EKSClusterRole
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  EksNodeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EKSNodeInstanceRole
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  # --- 4. EKS Cluster (Can be created now that base SGs and IAM roles exist) ---
+  EksCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref EksClusterName
+      Version: "1.29"
+      RoleArn: !GetAtt EksClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !GetAtt EksClusterSecurityGroup.GroupId
+        SubnetIds: # Now includes subnets from both AZs
+          - !Ref PublicSubnet
+          - !Ref PublicSubnet2
+          - !Ref PrivateAppSubnet
+          - !Ref PrivateAppSubnet2
+      # ADDED AccessConfig for EKS Cluster
+      AccessConfig:
+        AuthenticationMode: API_AND_CONFIG_MAP
+        BootstrapClusterCreatorAdminPermissions: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-EksCluster
+        - Key: Project
+          Value: !Ref ProjectTag
+    DependsOn: AttachGateway
+
+  # --- 5. RDS DB Subnet Group (Can be created now that private DB subnets exist) ---
+  MyRDSDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS instance
+      SubnetIds:
+        - !Ref PrivateDbSubnet        # Subnet in first AZ
+        - !Ref PrivateDbSubnet2       # Subnet in second AZ
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-RDSDBSubnetGroup
+        - Key: Project
+          Value: !Ref ProjectTag
+
+  # --- 6. RDS MySQL Instance (Can be created now that RDS SG and DB Subnet Group exist) ---
+  MyRDSDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Ref DbInstanceIdentifier
+      Engine: mysql
+      EngineVersion: 8.0.32
+      MasterUsername: admin # Hardcoded username
+      MasterUserPassword: password123 # Hardcoded password - REMOVE THIS FOR PRODUCTION!
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: !Ref DbAllocatedStorage
+      DBSubnetGroupName: !Ref MyRDSDBSubnetGroup
+      VPCSecurityGroups:
+        - !GetAtt RdsSecurityGroup.GroupId
+      PubliclyAccessible: true # Changed from false to true
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+      DBName: !Ref DbName
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ExpenseDB
+        - Key: Project
+          Value: !Ref ProjectTag
+    DependsOn:
+      - RdsSecurityGroup
+      - MyRDSDBSubnetGroup
+
+  # --- 7. Security Group INGRESS / EGRESS Rules (Separate Resources) ---
+  # Rules for Load Balancer SG
+  LoadBalancerSGIngressHTTP:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+    DependsOn: LoadBalancerSecurityGroup
+
+  # Rules for EKS Worker Node SG
+  EksWorkerNodeSGIngressFromLoadBalancer:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt EksWorkerNodeSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !GetAtt LoadBalancerSecurityGroup.GroupId
+    DependsOn:
+      - EksWorkerNodeSecurityGroup
+      - LoadBalancerSecurityGroup
+
+  EksWorkerNodeSGIngressSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt EksWorkerNodeSecurityGroup.GroupId
+      IpProtocol: -1
+      FromPort: 0
+      ToPort: 65535
+      SourceSecurityGroupId: !GetAtt EksWorkerNodeSecurityGroup.GroupId
+    DependsOn: EksWorkerNodeSecurityGroup
+
+  EksWorkerNodeSGIngressSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt EksWorkerNodeSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref AdminIpCidr
+    DependsOn: EksWorkerNodeSecurityGroup
+
+  # Rules for EKS Cluster SG
+  EksClusterSGIngressAdmin:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt EksClusterSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !Ref AdminIpCidr
+    DependsOn: EksClusterSecurityGroup
+
+  EksClusterSGIngressFromWorkerNodes:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt EksClusterSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 10250 # Kubelet port range typically
+      ToPort: 65535 # Ephemeral ports
+      SourceSecurityGroupId: !GetAtt EksWorkerNodeSecurityGroup.GroupId
+    DependsOn:
+      - EksClusterSecurityGroup
+      - EksWorkerNodeSecurityGroup
+
+  # Rules for RDS SG
+  RdsSGIngressFromAnywhere: # Renamed for clarity
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt RdsSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      CidrIp: 0.0.0.0/0 # Changed to 0.0.0.0/0 as requested
+    DependsOn: RdsSecurityGroup # Dependency is only on the security group itself
+
+  # --- 8. EKS Managed Node Group (Last, as it depends on Cluster and Worker Node SG being fully ready) ---
+  EksNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref EksClusterName
+      NodeRole: !GetAtt EksNodeInstanceRole.Arn
+      Subnets: # EKS nodes must also be in multiple AZs for resiliency
+        - !Ref PrivateAppSubnet
+        - !Ref PrivateAppSubnet2
+      InstanceTypes:
+        - !Ref EksNodeInstanceType
+      ScalingConfig:
+        MinSize: !Ref EksNodeMinSize
+        DesiredSize: !Ref EksNodeDesiredSize
+        MaxSize: !Ref EksNodeMaxSize
+      AmiType: AL2_x86_64
+      RemoteAccess:
+        Ec2SshKey: mykey # Hardcoded the key pair name here
+        SourceSecurityGroups:
+          - !GetAtt EksWorkerNodeSecurityGroup.GroupId
+      Labels:
+        Environment: !Ref EnvironmentName
+        NodeGroupType: app-nodes
+      Tags: # Corrected to expected JSON Object format, removed the problematic tag
+        Name: !Sub ${EnvironmentName}-EKSNodeGroup
+        Project: !Ref ProjectTag
+    DependsOn:
+      - EksCluster
+      - EksWorkerNodeSecurityGroup
+      - EksNodeInstanceRole
+
+Outputs:
+  VpcId:
+    Description: The ID of the VPC
+    Value: !Ref MyVPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VPCId
+  PublicSubnetId:
+    Description: The ID of the Public Subnet in the first AZ
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetId
+  PublicSubnetId2:
+    Description: The ID of the Public Subnet in the second AZ
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnetId2
+  PrivateAppSubnetId:
+    Description: The ID of the Private Application Subnet in the first AZ
+    Value: !Ref PrivateAppSubnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateAppSubnetId
+  PrivateAppSubnetId2:
+    Description: The ID of the Private Application Subnet in the second AZ
+    Value: !Ref PrivateAppSubnet2
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateAppSubnetId2
+  PrivateDbSubnetId:
+    Description: The ID of the Private Database Subnet in the first AZ
+    Value: !Ref PrivateDbSubnet
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateDbSubnetId
+  PrivateDbSubnetId2:
+    Description: The ID of the Private Database Subnet in the second AZ
+    Value: !Ref PrivateDbSubnet2
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateDbSubnetId2
+  EksWorkerNodeSecurityGroupId:
+    Description: Security Group ID for EKS Worker Nodes
+    Value: !GetAtt EksWorkerNodeSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${AWS::StackName}-EksWorkerNodeSecurityGroupId
+  RdsSecurityGroupId:
+    Description: Security Group ID for RDS
+    Value: !GetAtt RdsSecurityGroup.GroupId
+    Export:
+      Name: !Sub ${AWS::StackName}-RdsSecurityGroupId
+  DbEndpointAddress:
+    Description: The address of the RDS DB instance
+    Value: !GetAtt MyRDSDBInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DbEndpointAddress
+  DbEndpointPort:
+    Description: The port of the RDS DB instance
+    Value: !GetAtt MyRDSDBInstance.Endpoint.Port
+    Export:
+      Name: !Sub ${AWS::StackName}-DbEndpointPort
+  EksClusterNameOutput:
+    Description: The name of the EKS cluster
+    Value: !Ref EksClusterName
+    Export:
+      Name: !Sub ${AWS::StackName}-EksClusterName
+  EksClusterEndpoint:
+    Description: The endpoint for the EKS cluster API
+    Value: !GetAtt EksCluster.Endpoint
+    Export:
+      Name: !Sub ${AWS::StackName}-EksClusterEndpoint
